@@ -40,16 +40,25 @@ fn microservice_handler(
     {
         match (req.method(), req.uri().path()) {
             (&Method::GET, "/") => future::ok(Response::new(INDEX.into())),
+            (method, path) if path.starts_with(USER_PATH) => {
+                unimplemented!();
+            }
             _ => {
-                let response = Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .body(Body::empty())
-                    .unwrap();
+                let response = response_with_code(StatusCode::NOT_FOUND);
 
                 future::ok(response)
             }
         }
     }
+}
+
+// Helper
+// response_with_code - creates empty responses
+fn response_with_code(status_code: StatusCode) -> Response<Body> {
+    Response::builder()
+        .status(status_code)
+        .body(Body::empty())
+        .unwrap()
 }
 
 // Index
@@ -64,3 +73,6 @@ const INDEX: &'static str = r#"
   </body>
 </html>
 "#;
+
+// User path
+const USER_PATH: &str = "/user/";
