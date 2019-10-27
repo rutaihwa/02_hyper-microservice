@@ -1,6 +1,8 @@
 use futures::{future, Future};
 use hyper::service::service_fn;
 use hyper::{Body, Error, Method, Request, Response, Server, StatusCode};
+use lazy_static::lazy_static;
+use regex::Regex;
 use slab::Slab;
 use std::fmt;
 use std::sync::{Arc, Mutex};
@@ -45,66 +47,85 @@ fn microservice_handler(
     req: Request<Body>,
     user_db: &UserDb,
 ) -> impl Future<Item = Response<Body>, Error = Error> {
-    {
-        let response = {
-            match (req.method(), req.uri().path()) {
-                // / - index
-                (&Method::GET, "/") => Response::new(INDEX.into()),
-                // /user - Users
-                (method, path) if path.starts_with(USER_PATH) => {
-                    let user_id = path
-                        .trim_start_matches(USER_PATH)
-                        .parse::<UserId>()
-                        .ok()
-                        .map(|x| x as usize);
+    let response = {
+        let method = req.method();
+        let path = req.uri().path();
+        let mut users = user_db.lock().unwrap();
 
-                    let mut users = user_db.lock().unwrap();
+        // Index
+        if INDEX_PATH.is_match(path) {
+            if method == &Method::GET {
+                Response::new(INDEX.into())
+            } else {
+                response_with_code(StatusCode::METHOD_NOT_ALLOWED)
+            }
+        }
+        // Users
+        else if USERS_PATH.is_match(path) {
+            if method == &Method::GET {
+                let list = users
+                    .iter()
+                    .map(|(id, _)| id.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",");
 
-                    match (method, user_id) {
-                        // POST /user/
-                        (&Method::POST, None) => {
-                            let id = users.insert(UserData);
-                            Response::new(id.to_string().into())
-                        }
-                        // POST /user/<id>
-                        (&Method::POST, Some(_)) => response_with_code(StatusCode::BAD_REQUEST),
-                        // GET /user/<id>
-                        (&Method::GET, Some(id)) => {
-                            if let Some(data) = users.get(id) {
-                                Response::new(data.to_string().into())
-                            } else {
-                                response_with_code(StatusCode::NOT_FOUND)
-                            }
-                        }
-                        // PUT updating data
-                        (&Method::PUT, Some(id)) => {
-                            if let Some(user) = users.get_mut(id) {
-                                *user = UserData;
-                                response_with_code(StatusCode::OK)
-                            } else {
-                                response_with_code(StatusCode::NOT_FOUND)
-                            }
-                        }
-                        // DELETE - deleting data
-                        (&Method::DELETE, Some(id)) => {
-                            if users.contains(id) {
-                                users.remove(id);
-                                response_with_code(StatusCode::OK)
-                            } else {
-                                response_with_code(StatusCode::NOT_FOUND)
-                            }
-                        }
+                Response::new(list.into())
+            } else {
+                response_with_code(StatusCode::METHOD_NOT_ALLOWED)
+            }
+        }
+        // User
+        else if let Some(cap) = USER_PATH.captures(path) {
+            let user_id = cap
+                .name("user_id")
+                .and_then(|m| m.as_str().parse::<UserId>().ok().map(|x| x as usize));
 
-                        // Methods not allowed
-                        _ => response_with_code(StatusCode::METHOD_NOT_ALLOWED),
+            //Allowd methods
+            match (method, user_id) {
+                // POST /user/
+                (&Method::POST, None) => {
+                    let id = users.insert(UserData);
+                    Response::new(id.to_string().into())
+                }
+                // POST /user/<id>
+                (&Method::POST, Some(_)) => response_with_code(StatusCode::BAD_REQUEST),
+                // GET /user/<id>
+                (&Method::GET, Some(id)) => {
+                    if let Some(data) = users.get(id) {
+                        Response::new(data.to_string().into())
+                    } else {
+                        response_with_code(StatusCode::NOT_FOUND)
                     }
                 }
-                // Rest
-                _ => response_with_code(StatusCode::NOT_FOUND),
+                // PUT updating data
+                (&Method::PUT, Some(id)) => {
+                    if let Some(user) = users.get_mut(id) {
+                        *user = UserData;
+                        response_with_code(StatusCode::OK)
+                    } else {
+                        response_with_code(StatusCode::NOT_FOUND)
+                    }
+                }
+                // DELETE - deleting data
+                (&Method::DELETE, Some(id)) => {
+                    if users.contains(id) {
+                        users.remove(id);
+                        response_with_code(StatusCode::OK)
+                    } else {
+                        response_with_code(StatusCode::NOT_FOUND)
+                    }
+                }
+
+                // Everything else
+                _ => response_with_code(StatusCode::METHOD_NOT_ALLOWED),
             }
-        };
-        future::ok(response)
-    }
+        }
+        // Rest
+        else {
+            response_with_code(StatusCode::NOT_FOUND)
+        }
+    };
+    future::ok(response)
 }
 
 // Helper
@@ -129,5 +150,15 @@ const INDEX: &'static str = r#"
 </html>
 "#;
 
-// User path
-const USER_PATH: &str = "/user/";
+// Routes expressions
+lazy_static! {
+
+    // For '/', 'index.htm' and 'index.html'
+    static ref INDEX_PATH: Regex = Regex::new("^/(index\\.html?)?$").unwrap();
+
+    // For '/user/', '/user/user_id', and '/user/user_id/'
+    static ref USER_PATH: Regex = Regex::new("^/user/((?P<user_id>\\d+?)/?)?$").unwrap();
+
+    // For '/users/' and '/users'
+    static ref USERS_PATH: Regex = Regex::new("^/users/?$").unwrap();
+}
