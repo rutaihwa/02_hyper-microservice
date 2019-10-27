@@ -76,6 +76,26 @@ fn microservice_handler(
                                 response_with_code(StatusCode::NOT_FOUND)
                             }
                         }
+                        // PUT updating data
+                        (&Method::PUT, Some(id)) => {
+                            if let Some(user) = users.get_mut(id) {
+                                *user = UserData;
+                                response_with_code(StatusCode::OK)
+                            } else {
+                                response_with_code(StatusCode::NOT_FOUND)
+                            }
+                        }
+                        // DELETE - deleting data
+                        (&Method::DELETE, Some(id)) => {
+                            if users.contains(id) {
+                                users.remove(id);
+                                response_with_code(StatusCode::OK)
+                            } else {
+                                response_with_code(StatusCode::NOT_FOUND)
+                            }
+                        }
+
+                        // Methods not allowed
                         _ => response_with_code(StatusCode::METHOD_NOT_ALLOWED),
                     }
                 }
