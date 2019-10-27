@@ -2,12 +2,20 @@ use futures::{future, Future};
 use hyper::service::service_fn;
 use hyper::{Body, Error, Method, Request, Response, Server, StatusCode};
 use slab::Slab;
+use std::fmt;
 use std::sync::{Arc, Mutex};
 
 // User data
 type UserId = u64;
 struct UserData;
 type UserDb = Arc<Mutex<Slab<UserData>>>;
+
+// Display for UserData
+impl fmt::Display for UserData {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("{}")
+    }
+}
 
 fn main() {
     // Server address
@@ -38,17 +46,44 @@ fn microservice_handler(
     user_db: &UserDb,
 ) -> impl Future<Item = Response<Body>, Error = Error> {
     {
-        match (req.method(), req.uri().path()) {
-            (&Method::GET, "/") => future::ok(Response::new(INDEX.into())),
-            (method, path) if path.starts_with(USER_PATH) => {
-                unimplemented!();
-            }
-            _ => {
-                let response = response_with_code(StatusCode::NOT_FOUND);
+        let response = {
+            match (req.method(), req.uri().path()) {
+                // / - index
+                (&Method::GET, "/") => Response::new(INDEX.into()),
+                // /user - Users
+                (method, path) if path.starts_with(USER_PATH) => {
+                    let user_id = path
+                        .trim_start_matches(USER_PATH)
+                        .parse::<UserId>()
+                        .ok()
+                        .map(|x| x as usize);
 
-                future::ok(response)
+                    let mut users = user_db.lock().unwrap();
+
+                    match (method, user_id) {
+                        // POST /user/
+                        (&Method::POST, None) => {
+                            let id = users.insert(UserData);
+                            Response::new(id.to_string().into())
+                        }
+                        // POST /user/<id>
+                        (&Method::POST, Some(_)) => response_with_code(StatusCode::BAD_REQUEST),
+                        // GET /user/<id>
+                        (&Method::GET, Some(id)) => {
+                            if let Some(data) = users.get(id) {
+                                Response::new(data.to_string().into())
+                            } else {
+                                response_with_code(StatusCode::NOT_FOUND)
+                            }
+                        }
+                        _ => response_with_code(StatusCode::METHOD_NOT_ALLOWED),
+                    }
+                }
+                // Rest
+                _ => response_with_code(StatusCode::NOT_FOUND),
             }
-        }
+        };
+        future::ok(response)
     }
 }
 
